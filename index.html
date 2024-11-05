@@ -1,0 +1,332 @@
+<!--Par Louis G.-->
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Ray Marching Aim Game</title>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!--Partie style css-->
+    <style>
+      body {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+        padding: 0;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        align-items: center;
+        background-color: #111;
+        font-family: Arial, sans-serif;
+      }
+
+      #canvas {
+        border: 1px solid #fff;
+        height: 70vh;
+      }
+
+      #info {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        color: white;
+        margin-top: 10px;
+      }
+
+      #startButton {
+        margin-bottom: 10px;
+        padding: 10px 20px;
+        font-size: 12px;
+        cursor: pointer;
+      }
+
+      #title {
+        padding-top: auto;
+        color: white;
+        font-size: 24px;
+        margin-bottom: 10px;
+        text-align: center;
+      }
+    </style>
+  </head>
+  <!--Partie body-->
+  <body>
+    <div id="title">Ray Marching Aim Game</div>
+    <button id="startButton">Start Game</button>
+    <canvas id="canvas" width="800" height="600"></canvas>
+    <div id="info">
+      <div id="fps">FPS: 0</div>
+      <div id="timer">Time: 0.00s</div>
+      <div id="counter">Spheres Hit: 0 / 20</div>
+      <div id="personalBest">Personal Best: --.--s</div>
+    </div>
+    <!--Partie script-->
+    <script>
+      // Shaders pour le rendu des sphères
+      // Vertex shader
+      const vs = `#version 300 es  
+        in vec2 a_pos; // Position des sommets en entre
+        void main() {
+            gl_Position = vec4(a_pos, 0, 1); // Convertit la pos 2D en coord 3D en ajoutant z = 0 et w = 1
+        }
+    `;
+
+      // Fragment shader
+      const fs = `#version 300 es
+        precision highp float;
+        out vec4 out_color;
+
+        uniform vec2 u_resolution;
+        uniform vec2 u_mouse;
+        uniform float u_time;
+
+        float sphere(vec3 p, float s) {
+            return length(p) - s; // Calcul distance à la surface de la sphere
+        }
+
+        float scene(vec3 p, vec3 spherePos) {
+            return sphere(p - spherePos, 0.2); // Affiche la sphere dans la scene
+        }
+
+        vec3 getLightColor(vec3 normal, vec3 lightDir, vec3 baseColor) {
+            // Calcul de eclairage diffus.
+            float diffuse = max(dot(normal, lightDir), 0.0);
+            return baseColor * diffuse; // Couleur de la sphère avec lum.
+        }
+
+        void main() {
+            vec2 uv = (gl_FragCoord.xy / u_resolution) * 2.0 - 1.0;
+            uv.x *= u_resolution.x / u_resolution.y;
+
+            vec3 rayOrigin = vec3(0.0, 0.0, 3.0);
+            vec3 rayDir = normalize(vec3(uv, -1.0));
+
+            vec3 spherePos = vec3(u_mouse, 0.0);
+            float dist = 0.0;
+
+            for (int i = 0; i < 100; i++) {
+                vec3 p = rayOrigin + rayDir * dist;
+                float d = scene(p, spherePos);
+                dist += d;
+                if (d < 0.001) break;
+            }
+
+            vec3 color = vec3(0.6, 0.8, 1.0); // Couleur de fond bleu clair
+
+            if (dist < 100.0) {
+                vec3 p = rayOrigin + rayDir * dist;
+                vec3 normal = normalize(p - spherePos);
+
+                // Source de lum qui tourne
+                vec3 lightDir = normalize(vec3(cos(u_time), sin(u_time), 1.0));
+
+                // Chnage la couleur de la sphère basé sur le temps
+                vec3 baseColor = vec3(
+                    0.5 + 0.5 * sin(u_time),
+                    0.5 + 0.5 * sin(u_time + 2.0),
+                    0.5 + 0.5 * sin(u_time + 4.0)
+                );
+
+                // Applique éclairage à la couleur de la sphère.
+                vec3 lightColor = getLightColor(normal, lightDir, baseColor);
+
+                color = lightColor; // Applique la couleur finale avec light.
+            }
+
+            out_color = vec4(color, 1.0); // Sortie de la couleur finale.
+        }
+    
+    `;
+
+      // Crée un shader à partir du type et code source
+      function createShader(gl, type, src) {
+        const shader = gl.createShader(type);
+        gl.shaderSource(shader, src);
+        gl.compileShader(shader);
+        if (gl.getShaderParameter(shader, gl.COMPILE_STATUS)) return shader;
+        console.error("Could not compile shader:", gl.getShaderInfoLog(shader));
+      }
+
+      // Crée programme shader avec shaders vertex et fragment
+      function createProgram(gl, vertShader, fragShader) {
+        const program = gl.createProgram();
+        gl.attachShader(program, vertShader);
+        gl.attachShader(program, fragShader);
+        gl.linkProgram(program);
+        if (gl.getProgramParameter(program, gl.LINK_STATUS)) return program;
+        console.error("Could not link program:", gl.getProgramInfoLog(program));
+      }
+
+      function main() {
+        const canvas = document.getElementById("canvas");
+        const gl = canvas.getContext("webgl2");
+        if (!gl) return alert("Could not initialize WebGL2 context.");
+
+        // Multiplier la taille du canvas pour une meilleure résolution
+        const scale = 2; // Facteur pour augmenter la résolution
+        canvas.width = canvas.clientWidth * scale;
+        canvas.height = canvas.clientHeight * scale;
+
+        // Update viewport pour correspondre à la nouvelle taille
+        gl.viewport(0, 0, canvas.width, canvas.height);
+
+        // Compilation et lien des shaders
+        const vertShader = createShader(gl, gl.VERTEX_SHADER, vs);
+        const fragShader = createShader(gl, gl.FRAGMENT_SHADER, fs);
+        const program = createProgram(gl, vertShader, fragShader);
+
+        // Récup des emplacements des attributs et uniformes
+        const posAttrLoc = gl.getAttribLocation(program, "a_pos");
+        const resolutionUniformLocation = gl.getUniformLocation(
+          program,
+          "u_resolution"
+        );
+        const mouseUniformLocation = gl.getUniformLocation(program, "u_mouse");
+        const timeUniformLocation = gl.getUniformLocation(program, "u_time");
+
+        // Données pour les vertices
+        const data = new Float32Array([
+          -1, -1, 1, -1, -1, 1, 1, -1, 1, 1, -1, 1,
+        ]); // Vertices du rectangle
+
+        // Création et config du VAO
+        const vao = gl.createVertexArray();
+        gl.bindVertexArray(vao);
+
+        // Création et remplissage du buffer pour les vertices
+        const vbo = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
+        gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
+        gl.enableVertexAttribArray(posAttrLoc);
+        gl.vertexAttribPointer(posAttrLoc, 2, gl.FLOAT, false, 0, 0);
+
+        // Preparation du canvas
+        gl.viewport(0, 0, canvas.width, canvas.height);
+        gl.clearColor(0, 0, 0, 1);
+        gl.clear(gl.COLOR_BUFFER_BIT);
+        gl.useProgram(program);
+        gl.uniform2f(resolutionUniformLocation, canvas.width, canvas.height);
+
+        // Init des var de jeu
+        let startTime = Date.now();
+        let mouseX = 0;
+        let mouseY = 0;
+        let gameStarted = false;
+        let spheres = [];
+        let currentSphereIndex = 0;
+        let spheresHit = 0;
+        const numSpheres = 20; // Nbr total de sphères à cliquer
+        let personalBest = Infinity; // PB initial = infinie (pas de PB)
+        const personalBestDisplay = document.getElementById("personalBest");
+
+        // Événement de mouvement de la souris pour détecte des sphères
+        canvas.addEventListener("mousemove", (event) => {
+          const rect = canvas.getBoundingClientRect();
+          mouseX = ((event.clientX - rect.left) / rect.width) * 8 - 4;
+          mouseY = -((event.clientY - rect.top) / rect.height) * 6 + 3;
+
+          if (gameStarted && currentSphereIndex < spheres.length) {
+            const sphere = spheres[currentSphereIndex];
+            const dx = mouseX - sphere.x;
+            const dy = mouseY - sphere.y;
+            const isHit = Math.sqrt(dx * dx + dy * dy) <= 0.2;
+
+            if (isHit) {
+              spheresHit++;
+              document.getElementById(
+                "counter"
+              ).textContent = `Spheres Hit: ${spheresHit} / 20`;
+              currentSphereIndex++; // Sphère suivante
+            }
+
+            function updatePersonalBest(time) {
+              if (time < personalBest) {
+                personalBest = time;
+                personalBestDisplay.textContent = `Personal Best: ${time.toFixed(
+                  2
+                )}s`;
+              }
+            }
+
+            // Si partie se termine
+            if (currentSphereIndex >= numSpheres) {
+              gameStarted = false;
+              document.getElementById(
+                "counter"
+              ).textContent = `Spheres Hit: ${spheresHit}`;
+
+              // Calcul du temps final
+              const finalTime = (Date.now() - startTime) / 1000;
+              updatePersonalBest(finalTime);
+
+              // Affiche alerte
+              setTimeout(() => {
+                alert("Bravo! Vous avez terminé le jeu.");
+              }, 1);
+            }
+          }
+        });
+
+        // Démarrage du jeu
+        document.getElementById("startButton").addEventListener("click", () => {
+          gameStarted = true;
+          spheresHit = 0;
+          currentSphereIndex = 0;
+          document.getElementById(
+            "counter"
+          ).textContent = `Spheres Hit: ${spheresHit} / 20`;
+          spheres = Array.from({ length: numSpheres }, () => ({
+            x: Math.random() * 8 - 4,
+            y: Math.random() * 6 - 3,
+          }));
+          startTime = Date.now();
+        });
+
+        // Compteur FPS et affichage
+        let lastFrameTime = 0;
+        let frameCount = 0;
+        let fps = 0;
+        const fpsDisplay = document.getElementById("fps");
+        const timerDisplay = document.getElementById("timer");
+
+        function render() {
+          // Calcul du temps écoulé et maj du FPS
+          const currentTime = (Date.now() - startTime) / 1000;
+
+          frameCount++;
+          if (currentTime - lastFrameTime >= 1.0) {
+            fps = frameCount;
+            frameCount = 0;
+            lastFrameTime = currentTime;
+            fpsDisplay.textContent = `FPS: ${fps}`;
+          }
+
+          if (gameStarted) {
+            timerDisplay.textContent = `Time: ${currentTime.toFixed(2)}s`;
+          }
+
+          //Clear avec couleur bleu clair de base
+          gl.clearColor(0.6, 0.8, 1.0, 1.0); // Bleu clair
+          gl.clear(gl.COLOR_BUFFER_BIT);
+
+          // Mise à jour de u_time
+          gl.uniform1f(timeUniformLocation, currentTime);
+
+          // Rendu sphères si le jeu est démarré
+          if (gameStarted && currentSphereIndex < spheres.length) {
+            const sphere = spheres[currentSphereIndex];
+            gl.uniform2f(mouseUniformLocation, sphere.x, sphere.y);
+            gl.drawArrays(gl.TRIANGLES, 0, 6);
+          }
+
+          // Boucle d'anim
+          requestAnimationFrame(render);
+        }
+
+        render(); // Démarrer le rendu
+      }
+
+      window.onload = main;
+    </script>
+  </body>
+</html>
